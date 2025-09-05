@@ -45,4 +45,5 @@ packages/vscode-ide-companion/*.vsix
 gha-creds-*.json
 
 *.jsonl
+test*
 *.html

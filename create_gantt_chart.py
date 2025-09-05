@@ -67,6 +67,8 @@ class GanttChartGenerator:
                 'duration': None,
                 'tokens': data.get('totalTokens', 0),
                 'error': data.get('error', ''),
+                'request_text': '',
+                'response_text': '',
                 'events': []
             }
         
@@ -77,10 +79,24 @@ class GanttChartGenerator:
         
         if event['event'] == 'start':
             call_info['start_time'] = data['startTime']
+            # 保存请求文本（现在直接是解析后的对象或字符串）
+            if 'requestText' in data:
+                request_data = data['requestText']
+                if isinstance(request_data, (dict, list)):
+                    call_info['request_text'] = json.dumps(request_data)
+                else:
+                    call_info['request_text'] = str(request_data)
         elif event['event'] == 'end':
             call_info['end_time'] = data.get('endTime', data['startTime'])
             call_info['duration'] = data.get('duration', 0)
             call_info['tokens'] = data.get('totalTokens', call_info['tokens'])
+            # 保存响应文本（现在直接是解析后的对象或字符串）
+            if 'responseText' in data:
+                response_data = data['responseText']
+                if isinstance(response_data, (dict, list)):
+                    call_info['response_text'] = json.dumps(response_data)
+                else:
+                    call_info['response_text'] = str(response_data)
             if data.get('error'):
                 call_info['error'] = data['error']
     
@@ -184,6 +200,71 @@ class GanttChartGenerator:
             duration_ms = call['duration'] or 0
             tokens = call['tokens']
             
+            # 辅助函数：安全截取文本
+            def safe_truncate(text: str, max_length: int = 100) -> str:
+                if not text:
+                    return "无"
+                if len(text) <= max_length:
+                    return text
+                return text[:max_length] + "..."
+            
+            # 提取并简化request和response信息
+            request_preview = ""
+            response_preview = ""
+            
+            if call['request_text']:
+                # 处理请求文本（现在可能已经是解析后的JSON对象）
+                try:
+                    if isinstance(call['request_text'], str):
+                        request_data = json.loads(call['request_text'])
+                    else:
+                        request_data = call['request_text']
+                    
+                    if isinstance(request_data, list) and len(request_data) > 0:
+                        # 查找用户的文本输入
+                        user_text = ""
+                        for item in request_data:
+                            if item.get('role') == 'user' and 'parts' in item:
+                                for part in item['parts']:
+                                    if 'text' in part:
+                                        user_text = part['text']
+                                        break
+                                if user_text:
+                                    break
+                        request_preview = safe_truncate(user_text, 80)
+                    else:
+                        request_preview = safe_truncate(str(request_data), 80)
+                except:
+                    request_preview = safe_truncate(str(call['request_text']), 80)
+            
+            if call['response_text']:
+                # 处理响应文本（现在可能已经是解析后的JSON对象）
+                try:
+                    if isinstance(call['response_text'], str):
+                        response_data = json.loads(call['response_text'])
+                    else:
+                        response_data = call['response_text']
+                    
+                    if isinstance(response_data, dict):
+                        # 尝试提取candidates中的文本
+                        if 'candidates' in response_data:
+                            candidates = response_data['candidates']
+                            if isinstance(candidates, list) and len(candidates) > 0:
+                                candidate = candidates[0]
+                                if 'content' in candidate:
+                                    content = candidate['content']
+                                    if 'parts' in content:
+                                        for part in content['parts']:
+                                            if 'text' in part:
+                                                response_preview = safe_truncate(part['text'], 80)
+                                                break
+                        if not response_preview:
+                            response_preview = safe_truncate(str(response_data), 80)
+                    else:
+                        response_preview = safe_truncate(str(response_data), 80)
+                except:
+                    response_preview = safe_truncate(str(call['response_text']), 80)
+
             task_name = f"🤖 LLM-{model_short}"
             hover_text = (
                 f"<b>LLM调用: {model_short}</b><br>"
@@ -192,11 +273,13 @@ class GanttChartGenerator:
                 f"开始: {start_dt.strftime('%H:%M:%S.%f')[:-3]}<br>"
                 f"结束: {end_dt.strftime('%H:%M:%S.%f')[:-3]}<br>"
                 f"耗时: {duration_ms}ms<br>"
-                f"Tokens: {tokens}"
+                f"Tokens: {tokens}<br>"
+                f"<br><b>请求:</b> {request_preview}<br>"
+                f"<b>响应:</b> {response_preview}"
             )
             
             if call['error']:
-                hover_text += f"<br>错误: {call['error']}"
+                hover_text += f"<br><br><b>错误:</b> {call['error']}"
             
             gantt_data.append({
                 'Task': task_name,

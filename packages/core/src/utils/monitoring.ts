@@ -298,16 +298,66 @@ export class MonitoringService {
     }
   }
 
+
+  private isJsonString(text: string): boolean {
+    /**
+     * 判断字符串是否可能是JSON
+     */
+    const trimmed = text.trim();
+    return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+           (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  }
+
   private writeToFile(event: MonitoringEvent): void {
     if (!this.enableFileOutput || !this.outputFile) return;
 
     try {
       const fs = require('fs');
-      const line = JSON.stringify(event) + '\n';
+      
+      // 直接替换原始数据中的JSON字符串字段为解析后的内容
+      const processedData = this.processDataForStorage(event.data);
+      const enhancedEvent = {
+        ...event,
+        data: processedData
+      };
+      
+      const line = JSON.stringify(enhancedEvent) + '\n';
       fs.appendFileSync(this.outputFile, line, 'utf8');
     } catch (error) {
       // Silently ignore file write errors to avoid disrupting the main flow
     }
+  }
+
+  private processDataForStorage(data: any): any {
+    /**
+     * 处理数据用于存储，将JSON字符串字段替换为解析后的对象
+     */
+    if (typeof data !== 'object' || data === null) {
+      return data;
+    }
+
+    if (Array.isArray(data)) {
+      return data.map(item => this.processDataForStorage(item));
+    }
+
+    const processed: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === 'string' && this.isJsonString(value)) {
+        try {
+          // 尝试解析JSON字符串，成功则替换为解析后的对象
+          const parsedValue = JSON.parse(value);
+          processed[key] = this.processDataForStorage(parsedValue); // 递归处理
+        } catch {
+          // 解析失败则保持原始字符串
+          processed[key] = value;
+        }
+      } else if (typeof value === 'object') {
+        processed[key] = this.processDataForStorage(value);
+      } else {
+        processed[key] = value;
+      }
+    }
+    return processed;
   }
 
   public getLLMCallMetrics(id: string): LLMCallMetrics | undefined {

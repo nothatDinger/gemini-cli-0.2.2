@@ -129,10 +129,11 @@ def analyze_trace_file(filename='trace.jsonl'):
                 print(f"   详细结果: {result_preview}")
         
         if len(tool_end_events) > 5:
-            print(f"\n  ... 还有 {len(tool_end_events) - 5} 个工具调用结果"))
+            print(f"\n  ... 还有 {len(tool_end_events) - 5} 个工具调用结果")
     
     # 用户确认统计
-    approval_events = [e for e in events_timeline if e.get('type') == 'user_confirmation']
+    all_events = llm_calls + tool_calls  # 先定义all_events
+    approval_events = [e for e in all_events if e.get('type') == 'user_confirmation']
     approval_requests = [e for e in approval_events if e.get('event') == 'approval_requested']
     approval_grants = [e for e in approval_events if e.get('event') == 'approval_granted']
     
@@ -169,7 +170,6 @@ def analyze_trace_file(filename='trace.jsonl'):
     print("\n⏰ 时间线分析:")
     print("-" * 30)
     
-    all_events = llm_calls + tool_calls
     all_events.sort(key=lambda x: x['timestamp'])
     
     for event in all_events[-5:]:  # 显示最后5个事件
