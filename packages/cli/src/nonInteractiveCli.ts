@@ -13,6 +13,7 @@ import {
   parseAndFormatApiError,
   FatalInputError,
   FatalTurnLimitedError,
+  monitoringService,
 } from '@google/gemini-cli-core';
 import type { Content, Part } from '@google/genai';
 
@@ -24,6 +25,8 @@ export async function runNonInteractive(
   input: string,
   prompt_id: string,
 ): Promise<void> {
+  // Initialize monitoring service
+  monitoringService.initialize(config);
   const consolePatcher = new ConsolePatcher({
     stderr: true,
     debugMode: config.getDebugMode(),
@@ -131,6 +134,12 @@ export async function runNonInteractive(
     throw error;
   } finally {
     consolePatcher.cleanup();
+    
+    // Print monitoring summary
+    if (config.getDebugMode()) {
+      monitoringService.printSummary();
+    }
+    
     if (isTelemetrySdkInitialized()) {
       await shutdownTelemetry(config);
     }

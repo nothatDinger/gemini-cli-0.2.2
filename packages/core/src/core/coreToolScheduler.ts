@@ -34,6 +34,7 @@ import {
 import * as Diff from 'diff';
 import { doesToolInvocationMatch } from '../utils/tool-utils.js';
 import levenshtein from 'fast-levenshtein';
+import { monitoringService } from '../utils/monitoring.js';
 
 export type ValidatingToolCall = {
   status: 'validating';
@@ -42,6 +43,7 @@ export type ValidatingToolCall = {
   invocation: AnyToolInvocation;
   startTime?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type ScheduledToolCall = {
@@ -51,6 +53,7 @@ export type ScheduledToolCall = {
   invocation: AnyToolInvocation;
   startTime?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type ErroredToolCall = {
@@ -60,6 +63,7 @@ export type ErroredToolCall = {
   tool?: AnyDeclarativeTool;
   durationMs?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type SuccessfulToolCall = {
@@ -70,6 +74,7 @@ export type SuccessfulToolCall = {
   invocation: AnyToolInvocation;
   durationMs?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type ExecutingToolCall = {
@@ -80,6 +85,7 @@ export type ExecutingToolCall = {
   liveOutput?: string;
   startTime?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type CancelledToolCall = {
@@ -90,6 +96,7 @@ export type CancelledToolCall = {
   invocation: AnyToolInvocation;
   durationMs?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type WaitingToolCall = {
@@ -100,6 +107,7 @@ export type WaitingToolCall = {
   confirmationDetails: ToolCallConfirmationDetails;
   startTime?: number;
   outcome?: ToolConfirmationOutcome;
+  monitoringId?: string;
 };
 
 export type Status = ToolCall['status'];
@@ -323,6 +331,7 @@ export class CoreToolScheduler {
       const existingStartTime = currentCall.startTime;
       const toolInstance = currentCall.tool;
       const invocation = currentCall.invocation;
+      const monitoringId = currentCall.monitoringId;
 
       const outcome = currentCall.outcome;
 
@@ -331,6 +340,33 @@ export class CoreToolScheduler {
           const durationMs = existingStartTime
             ? Date.now() - existingStartTime
             : undefined;
+          
+          // End monitoring with success
+          if (monitoringId) {
+            const response = auxiliaryData as ToolCallResponseInfo;
+            const resultDisplayStr = typeof response.resultDisplay === 'string' 
+              ? response.resultDisplay 
+              : JSON.stringify(response.resultDisplay);
+            
+            // 从responseParts中提取文本内容作为完整结果
+            const fullResult = response.responseParts
+              ?.map(part => {
+                if (typeof part === 'string') return part;
+                if (part.text) return part.text;
+                return JSON.stringify(part);
+              })
+              .join('\n') || resultDisplayStr;
+            
+            monitoringService.endToolCall(
+              monitoringId,
+              'completed',
+              undefined,
+              fullResult,
+              resultDisplayStr,
+              response.responseParts
+            );
+          }
+          
           return {
             request: currentCall.request,
             tool: toolInstance,
@@ -339,12 +375,24 @@ export class CoreToolScheduler {
             response: auxiliaryData as ToolCallResponseInfo,
             durationMs,
             outcome,
+            monitoringId,
           } as SuccessfulToolCall;
         }
         case 'error': {
           const durationMs = existingStartTime
             ? Date.now() - existingStartTime
             : undefined;
+          
+          // End monitoring with error
+          if (monitoringId) {
+            const response = auxiliaryData as ToolCallResponseInfo;
+            monitoringService.endToolCall(
+              monitoringId,
+              'error',
+              response.error?.message || 'Unknown error'
+            );
+          }
+          
           return {
             request: currentCall.request,
             status: 'error',
@@ -352,9 +400,15 @@ export class CoreToolScheduler {
             response: auxiliaryData as ToolCallResponseInfo,
             durationMs,
             outcome,
+            monitoringId,
           } as ErroredToolCall;
         }
         case 'awaiting_approval':
+          // Update monitoring status
+          if (monitoringId) {
+            monitoringService.updateToolCallStatus(monitoringId, 'awaiting_approval');
+          }
+          
           return {
             request: currentCall.request,
             tool: toolInstance,
@@ -363,8 +417,14 @@ export class CoreToolScheduler {
             startTime: existingStartTime,
             outcome,
             invocation,
+            monitoringId,
           } as WaitingToolCall;
         case 'scheduled':
+          // Update monitoring status
+          if (monitoringId) {
+            monitoringService.updateToolCallStatus(monitoringId, 'scheduled');
+          }
+          
           return {
             request: currentCall.request,
             tool: toolInstance,
@@ -372,11 +432,21 @@ export class CoreToolScheduler {
             startTime: existingStartTime,
             outcome,
             invocation,
+            monitoringId,
           } as ScheduledToolCall;
         case 'cancelled': {
           const durationMs = existingStartTime
             ? Date.now() - existingStartTime
             : undefined;
+
+          // End monitoring with cancelled
+          if (monitoringId) {
+            monitoringService.endToolCall(
+              monitoringId,
+              'cancelled',
+              `Operation cancelled: ${auxiliaryData}`
+            );
+          }
 
           // Preserve diff for cancelled edit operations
           let resultDisplay: ToolResultDisplay | undefined = undefined;
@@ -417,9 +487,15 @@ export class CoreToolScheduler {
             },
             durationMs,
             outcome,
+            monitoringId,
           } as CancelledToolCall;
         }
         case 'validating':
+          // Update monitoring status
+          if (monitoringId) {
+            monitoringService.updateToolCallStatus(monitoringId, 'validating');
+          }
+          
           return {
             request: currentCall.request,
             tool: toolInstance,
@@ -427,8 +503,14 @@ export class CoreToolScheduler {
             startTime: existingStartTime,
             outcome,
             invocation,
+            monitoringId,
           } as ValidatingToolCall;
         case 'executing':
+          // Update monitoring status
+          if (monitoringId) {
+            monitoringService.updateToolCallStatus(monitoringId, 'executing', Date.now());
+          }
+          
           return {
             request: currentCall.request,
             tool: toolInstance,
@@ -436,6 +518,7 @@ export class CoreToolScheduler {
             startTime: existingStartTime,
             outcome,
             invocation,
+            monitoringId,
           } as ExecutingToolCall;
         default: {
           const exhaustiveCheck: never = newStatus;
@@ -624,12 +707,25 @@ export class CoreToolScheduler {
             };
           }
 
+          const startTime = Date.now();
+          const monitoringId = `tool-${reqInfo.callId}-${startTime}`;
+          
+          // Start monitoring
+          monitoringService.startToolCall(
+            monitoringId,
+            reqInfo.name,
+            reqInfo.callId,
+            reqInfo.prompt_id,
+            reqInfo.args
+          );
+
           return {
             status: 'validating',
             request: reqInfo,
             tool: toolInstance,
             invocation: invocationOrError,
-            startTime: Date.now(),
+            startTime,
+            monitoringId,
           };
         },
       );

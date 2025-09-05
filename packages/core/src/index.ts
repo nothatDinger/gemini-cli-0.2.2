@@ -108,6 +108,7 @@ export * from './telemetry/index.js';
 export { sessionId } from './utils/session.js';
 export * from './utils/browser.js';
 export { Storage } from './config/storage.js';
+export { monitoringService } from './utils/monitoring.js';
 
 // Export test utils
 export * from './test-utils/index.js';

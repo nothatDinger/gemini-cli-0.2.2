@@ -80,6 +80,7 @@ export interface CliArgs {
   screenReader: boolean | undefined;
   useSmartEdit: boolean | undefined;
   sessionSummary: string | undefined;
+  monitorOutput: string | undefined;
 }
 
 export async function parseArguments(settings: Settings): Promise<CliArgs> {
@@ -232,6 +233,11 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
         .option('session-summary', {
           type: 'string',
           description: 'File to write session summary to.',
+        })
+        .option('monitor-output', {
+          type: 'string',
+          description: 'File path for monitoring output (default: trace.jsonl).',
+          default: 'trace.jsonl',
         })
         .deprecateOption(
           'telemetry',
@@ -619,6 +625,7 @@ export async function loadCliConfig(
     enablePromptCompletion: settings.general?.enablePromptCompletion ?? false,
     eventEmitter: appEvents,
     useSmartEdit: argv.useSmartEdit ?? settings.useSmartEdit,
+    monitorOutput: argv.monitorOutput,
   });
 }
 

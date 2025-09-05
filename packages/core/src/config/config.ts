@@ -211,6 +211,7 @@ export interface ConfigParameters {
   enablePromptCompletion?: boolean;
   eventEmitter?: EventEmitter;
   useSmartEdit?: boolean;
+  monitorOutput?: string;
 }
 
 export class Config {
@@ -288,6 +289,7 @@ export class Config {
   private readonly fileExclusions: FileExclusions;
   private readonly eventEmitter?: EventEmitter;
   private readonly useSmartEdit: boolean;
+  private readonly monitorOutput: string | undefined;
 
   constructor(params: ConfigParameters) {
     this.sessionId = params.sessionId;
@@ -364,6 +366,7 @@ export class Config {
     this.enablePromptCompletion = params.enablePromptCompletion ?? false;
     this.fileExclusions = new FileExclusions(this);
     this.eventEmitter = params.eventEmitter;
+    this.monitorOutput = params.monitorOutput;
 
     if (params.contextFileName) {
       setGeminiMdFilename(params.contextFileName);
@@ -518,6 +521,10 @@ export class Config {
 
   getDebugMode(): boolean {
     return this.debugMode;
+  }
+
+  getMonitorOutput(): string | undefined {
+    return this.monitorOutput;
   }
   getQuestion(): string | undefined {
     return this.question;

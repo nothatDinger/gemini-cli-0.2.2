@@ -28,6 +28,7 @@ import {
 import type { ContentGenerator } from './contentGenerator.js';
 import { toContents } from '../code_assist/converter.js';
 import { isStructuredError } from '../utils/quotaErrorDetection.js';
+import { monitoringService } from '../utils/monitoring.js';
 
 interface StructuredError {
   status: number;
@@ -106,6 +107,16 @@ export class LoggingContentGenerator implements ContentGenerator {
     userPromptId: string,
   ): Promise<GenerateContentResponse> {
     const startTime = Date.now();
+    const monitoringId = `llm-${userPromptId}-${startTime}`;
+    
+    // Start monitoring
+    monitoringService.startLLMCall(
+      monitoringId,
+      req.model,
+      userPromptId,
+      JSON.stringify(toContents(req.contents))
+    );
+    
     this.logApiRequest(toContents(req.contents), req.model, userPromptId);
     try {
       const response = await this.wrapped.generateContent(req, userPromptId);
@@ -116,10 +127,27 @@ export class LoggingContentGenerator implements ContentGenerator {
         response.usageMetadata,
         JSON.stringify(response),
       );
+      
+      // End monitoring with success
+      monitoringService.endLLMCall(
+        monitoringId,
+        'completed',
+        undefined,
+        response.usageMetadata?.promptTokenCount,
+        response.usageMetadata?.candidatesTokenCount,
+        response.usageMetadata?.totalTokenCount,
+        JSON.stringify(response)
+      );
+      
       return response;
     } catch (error) {
       const durationMs = Date.now() - startTime;
       this._logApiError(durationMs, error, userPromptId);
+      
+      // End monitoring with error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      monitoringService.endLLMCall(monitoringId, 'error', errorMessage);
+      
       throw error;
     }
   }
@@ -129,6 +157,16 @@ export class LoggingContentGenerator implements ContentGenerator {
     userPromptId: string,
   ): Promise<AsyncGenerator<GenerateContentResponse>> {
     const startTime = Date.now();
+    const monitoringId = `llm-stream-${userPromptId}-${startTime}`;
+    
+    // Start monitoring
+    monitoringService.startLLMCall(
+      monitoringId,
+      req.model,
+      userPromptId,
+      JSON.stringify(toContents(req.contents))
+    );
+    
     this.logApiRequest(toContents(req.contents), req.model, userPromptId);
 
     let stream: AsyncGenerator<GenerateContentResponse>;
@@ -137,16 +175,22 @@ export class LoggingContentGenerator implements ContentGenerator {
     } catch (error) {
       const durationMs = Date.now() - startTime;
       this._logApiError(durationMs, error, userPromptId);
+      
+      // End monitoring with error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      monitoringService.endLLMCall(monitoringId, 'error', errorMessage);
+      
       throw error;
     }
 
-    return this.loggingStreamWrapper(stream, startTime, userPromptId);
+    return this.loggingStreamWrapper(stream, startTime, userPromptId, monitoringId);
   }
 
   private async *loggingStreamWrapper(
     stream: AsyncGenerator<GenerateContentResponse>,
     startTime: number,
     userPromptId: string,
+    monitoringId: string,
   ): AsyncGenerator<GenerateContentResponse> {
     let lastResponse: GenerateContentResponse | undefined;
     const responses: GenerateContentResponse[] = [];
@@ -164,6 +208,11 @@ export class LoggingContentGenerator implements ContentGenerator {
     } catch (error) {
       const durationMs = Date.now() - startTime;
       this._logApiError(durationMs, error, userPromptId);
+      
+      // End monitoring with error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      monitoringService.endLLMCall(monitoringId, 'error', errorMessage);
+      
       throw error;
     }
     const durationMs = Date.now() - startTime;
@@ -173,6 +222,17 @@ export class LoggingContentGenerator implements ContentGenerator {
         userPromptId,
         lastUsageMetadata,
         JSON.stringify(responses),
+      );
+      
+      // End monitoring with success
+      monitoringService.endLLMCall(
+        monitoringId,
+        'completed',
+        undefined,
+        lastUsageMetadata?.promptTokenCount,
+        lastUsageMetadata?.candidatesTokenCount,
+        lastUsageMetadata?.totalTokenCount,
+        JSON.stringify(responses)
       );
     }
   }

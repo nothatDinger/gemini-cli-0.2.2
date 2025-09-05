@@ -41,6 +41,7 @@ import {
   IdeConnectionType,
   FatalConfigError,
   uiTelemetryService,
+  monitoringService,
 } from '@google/gemini-cli-core';
 import { validateAuthMethod } from './config/auth.js';
 import { setMaxSizedBoxDebugging } from './ui/components/shared/MaxSizedBox.js';
@@ -154,13 +155,12 @@ export function setupUnhandledRejectionHandler() {
 This is an unexpected error. Please file a bug report using the /bug tool.
 CRITICAL: Unhandled Promise Rejection!
 =========================================
-Reason: ${reason}${
-      reason instanceof Error && reason.stack
+Reason: ${reason}${reason instanceof Error && reason.stack
         ? `
 Stack trace:
 ${reason.stack}`
         : ''
-    }`;
+      }`;
     appEvents.emit(AppEvent.LogError, errorMessage);
     if (!unhandledRejectionOccurred) {
       unhandledRejectionOccurred = true;
@@ -204,7 +204,13 @@ export async function startInteractiveUI(
       }
     });
 
-  registerCleanup(() => instance.unmount());
+  registerCleanup(() => {
+    // Print monitoring summary before unmounting
+    if (config.getDebugMode()) {
+      monitoringService.printSummary();
+    }
+    instance.unmount();
+  });
 }
 
 export async function main() {
@@ -289,6 +295,9 @@ export async function main() {
       <InitializingComponent initialTotal={mcpServersCount} />,
     );
   }
+
+  // Initialize monitoring service for interactive mode
+  monitoringService.initialize(config);
 
   await config.initialize();
 
@@ -384,7 +393,7 @@ export async function main() {
 
   if (
     settings.merged.security?.auth?.selectedType ===
-      AuthType.LOGIN_WITH_GOOGLE &&
+    AuthType.LOGIN_WITH_GOOGLE &&
     config.isBrowserLaunchSuppressed()
   ) {
     // Do oauth before app renders to make copying the link possible.
