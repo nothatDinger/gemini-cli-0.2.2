@@ -57,17 +57,32 @@ export interface UserConfirmationMetrics {
   waitingDuration?: number;
 }
 
+export interface EmbeddingCallMetrics {
+  id: string;
+  model: string;
+  promptId: string;
+  startTime: number;
+  endTime?: number;
+  duration?: number;
+  status: 'started' | 'completed' | 'error';
+  error?: string;
+  textCount: number; // 输入文本数量
+  vectorDimensions?: number; // 向量维度
+  requestTexts?: string[]; // 输入文本内容（可选，用于调试）
+}
+
 export interface MonitoringEvent {
   timestamp: string;
-  type: 'llm_call' | 'tool_call' | 'user_confirmation';
-  event: 'start' | 'end' | 'error' | 'approval_requested' | 'approval_granted' | 'approval_denied' | 'modification_requested';
-  data: LLMCallMetrics | ToolCallMetrics | UserConfirmationMetrics;
+  type: 'llm_call' | 'tool_call' | 'user_confirmation' | 'embedding_call';
+  event: 'completed' | 'error' | 'cancelled' | 'approval_requested' | 'approval_granted' | 'approval_denied' | 'modification_requested';
+  data: LLMCallMetrics | ToolCallMetrics | UserConfirmationMetrics | EmbeddingCallMetrics;
 }
 
 export class MonitoringService {
   private static instance: MonitoringService;
   private llmCalls = new Map<string, LLMCallMetrics>();
   private toolCalls = new Map<string, ToolCallMetrics>();
+  private embeddingCalls = new Map<string, EmbeddingCallMetrics>();
   private events: MonitoringEvent[] = [];
   private enableConsoleOutput = false;
   private enableFileOutput = false;
@@ -98,8 +113,8 @@ export class MonitoringService {
       requestText,
     };
 
+    // 融合模式：只在内存中保存数据，不记录start事件到文件
     this.llmCalls.set(id, metrics);
-    this.recordEvent('llm_call', 'start', metrics);
     this.logToConsole(`🚀 LLM调用开始: ${model} (ID: ${id}, Prompt: ${promptId})`);
   }
 
@@ -129,7 +144,8 @@ export class MonitoringService {
     };
 
     this.llmCalls.set(id, updatedMetrics);
-    this.recordEvent('llm_call', status === 'completed' ? 'end' : 'error', updatedMetrics);
+    // 融合模式：记录完整事件（包含start+end信息）
+    this.recordEvent('llm_call', status === 'completed' ? 'completed' : 'error', updatedMetrics);
     
     const durationText = updatedMetrics.duration ? `${updatedMetrics.duration}ms` : 'unknown';
     const tokenText = totalTokens ? ` (${totalTokens} tokens)` : '';
@@ -155,8 +171,8 @@ export class MonitoringService {
       args,
     };
 
+    // 融合模式：只在内存中保存数据，不记录start事件到文件
     this.toolCalls.set(id, metrics);
-    this.recordEvent('tool_call', 'start', metrics);
     this.logToConsole(`🔧 工具调用开始: ${toolName} (ID: ${id}, Call: ${callId})`);
   }
 
@@ -258,7 +274,12 @@ export class MonitoringService {
     updatedMetrics.pureExecutionDuration = pureExecutionDuration;
 
     this.toolCalls.set(id, updatedMetrics);
-    this.recordEvent('tool_call', status === 'completed' ? 'end' : 'error', updatedMetrics);
+    
+    // 融合模式：记录完整事件（包含start+end信息）
+    const eventType = status === 'completed' ? 'completed' : 
+                     status === 'cancelled' ? 'cancelled' : 'error';
+    
+    this.recordEvent('tool_call', eventType, updatedMetrics);
     
     const totalDuration = updatedMetrics.duration ? `${updatedMetrics.duration}ms` : 'unknown';
     const pureExecDuration = updatedMetrics.pureExecutionDuration ? ` | 纯执行: ${updatedMetrics.pureExecutionDuration}ms` : '';
@@ -280,7 +301,59 @@ export class MonitoringService {
     this.logToConsole(`${statusIcon} 工具调用${statusText}: ${metrics.toolName} (ID: ${id}) - 总耗时: ${totalDuration}${pureExecDuration}${waitingTime}${resultPreview}`);
   }
 
-  private recordEvent(type: MonitoringEvent['type'], event: MonitoringEvent['event'], data: LLMCallMetrics | ToolCallMetrics | UserConfirmationMetrics): void {
+  public startEmbeddingCall(
+    id: string,
+    model: string,
+    promptId: string,
+    textCount: number,
+    requestTexts?: string[]
+  ): void {
+    const metrics: EmbeddingCallMetrics = {
+      id,
+      model,
+      promptId,
+      startTime: Date.now(),
+      status: 'started',
+      textCount,
+      requestTexts,
+    };
+
+    // 融合模式：只在内存中保存数据，不记录start事件到文件
+    this.embeddingCalls.set(id, metrics);
+    this.logToConsole(`🔗 Embedding调用开始: ${model} (ID: ${id}, 文本数量: ${textCount})`);
+  }
+
+  public endEmbeddingCall(
+    id: string,
+    status: 'completed' | 'error',
+    error?: string,
+    vectorDimensions?: number
+  ): void {
+    const metrics = this.embeddingCalls.get(id);
+    if (!metrics) return;
+
+    const endTime = Date.now();
+    const updatedMetrics: EmbeddingCallMetrics = {
+      ...metrics,
+      endTime,
+      duration: endTime - metrics.startTime,
+      status,
+      error,
+      vectorDimensions,
+    };
+
+    this.embeddingCalls.set(id, updatedMetrics);
+    // 融合模式：记录完整事件（包含start+end信息）
+    this.recordEvent('embedding_call', status === 'completed' ? 'completed' : 'error', updatedMetrics);
+    
+    const durationText = updatedMetrics.duration ? `${updatedMetrics.duration}ms` : 'unknown';
+    const vectorText = vectorDimensions ? ` (向量维度: ${vectorDimensions})` : '';
+    const statusIcon = status === 'completed' ? '✅' : '❌';
+    
+    this.logToConsole(`${statusIcon} Embedding调用${status === 'completed' ? '完成' : '失败'}: ${metrics.model} (ID: ${id}) - 耗时: ${durationText}${vectorText}`);
+  }
+
+  private recordEvent(type: MonitoringEvent['type'], event: MonitoringEvent['event'], data: LLMCallMetrics | ToolCallMetrics | UserConfirmationMetrics | EmbeddingCallMetrics): void {
     const monitoringEvent: MonitoringEvent = {
       timestamp: new Date().toISOString(),
       type,
@@ -368,10 +441,15 @@ export class MonitoringService {
     return this.toolCalls.get(id);
   }
 
-  public getAllMetrics(): { llmCalls: LLMCallMetrics[]; toolCalls: ToolCallMetrics[] } {
+  public getEmbeddingCallMetrics(id: string): EmbeddingCallMetrics | undefined {
+    return this.embeddingCalls.get(id);
+  }
+
+  public getAllMetrics(): { llmCalls: LLMCallMetrics[]; toolCalls: ToolCallMetrics[]; embeddingCalls: EmbeddingCallMetrics[] } {
     return {
       llmCalls: Array.from(this.llmCalls.values()),
       toolCalls: Array.from(this.toolCalls.values()),
+      embeddingCalls: Array.from(this.embeddingCalls.values()),
     };
   }
 
@@ -382,16 +460,19 @@ export class MonitoringService {
   public clearMetrics(): void {
     this.llmCalls.clear();
     this.toolCalls.clear();
+    this.embeddingCalls.clear();
     this.events.length = 0;
   }
 
   public printSummary(): void {
     const llmCalls = Array.from(this.llmCalls.values());
     const toolCalls = Array.from(this.toolCalls.values());
+    const embeddingCalls = Array.from(this.embeddingCalls.values());
 
     console.log('\n📊 监控总结:');
     console.log(`LLM调用: ${llmCalls.length}次`);
     console.log(`工具调用: ${toolCalls.length}次`);
+    console.log(`Embedding调用: ${embeddingCalls.length}次`);
 
     const completedLLMCalls = llmCalls.filter(c => c.status === 'completed');
     if (completedLLMCalls.length > 0) {
@@ -405,6 +486,14 @@ export class MonitoringService {
     if (completedToolCalls.length > 0) {
       const avgDuration = completedToolCalls.reduce((sum, c) => sum + (c.duration || 0), 0) / completedToolCalls.length;
       console.log(`工具平均执行时间: ${avgDuration.toFixed(0)}ms`);
+    }
+
+    const completedEmbeddingCalls = embeddingCalls.filter(c => c.status === 'completed');
+    if (completedEmbeddingCalls.length > 0) {
+      const avgDuration = completedEmbeddingCalls.reduce((sum, c) => sum + (c.duration || 0), 0) / completedEmbeddingCalls.length;
+      const totalTexts = completedEmbeddingCalls.reduce((sum, c) => sum + c.textCount, 0);
+      console.log(`Embedding平均响应时间: ${avgDuration.toFixed(0)}ms`);
+      console.log(`Embedding总文本数量: ${totalTexts}`);
     }
     console.log('');
   }

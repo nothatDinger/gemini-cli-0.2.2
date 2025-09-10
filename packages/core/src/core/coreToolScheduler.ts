@@ -673,19 +673,44 @@ export class CoreToolScheduler {
 
       const newToolCalls: ToolCall[] = requestsToProcess.map(
         (reqInfo): ToolCall => {
+          const startTime = Date.now();
+          const monitoringId = `tool-${reqInfo.callId}-${startTime}`;
+          
+          // Start monitoring for ALL tool calls (including failures)
+          monitoringService.startToolCall(
+            monitoringId,
+            reqInfo.name,
+            reqInfo.callId,
+            reqInfo.prompt_id,
+            reqInfo.args
+          );
+          
           const toolInstance = this.toolRegistry.getTool(reqInfo.name);
           if (!toolInstance) {
             const suggestion = this.getToolSuggestion(reqInfo.name);
             const errorMessage = `Tool "${reqInfo.name}" not found in registry. Tools must use the exact names that are registered.${suggestion}`;
+            const errorResponse = createErrorResponse(
+              reqInfo,
+              new Error(errorMessage),
+              ToolErrorType.TOOL_NOT_REGISTERED,
+            );
+            
+            // End monitoring for failed tool call
+            monitoringService.endToolCall(
+              monitoringId,
+              'error',
+              errorMessage,
+              JSON.stringify(errorResponse),
+              undefined,
+              undefined
+            );
+            
             return {
               status: 'error',
               request: reqInfo,
-              response: createErrorResponse(
-                reqInfo,
-                new Error(errorMessage),
-                ToolErrorType.TOOL_NOT_REGISTERED,
-              ),
+              response: errorResponse,
               durationMs: 0,
+              monitoringId,
             };
           }
 
@@ -694,30 +719,31 @@ export class CoreToolScheduler {
             reqInfo.args,
           );
           if (invocationOrError instanceof Error) {
+            const errorResponse = createErrorResponse(
+              reqInfo,
+              invocationOrError,
+              ToolErrorType.INVALID_TOOL_PARAMS,
+            );
+            
+            // End monitoring for failed tool call
+            monitoringService.endToolCall(
+              monitoringId,
+              'error',
+              invocationOrError.message,
+              JSON.stringify(errorResponse),
+              undefined,
+              undefined
+            );
+            
             return {
               status: 'error',
               request: reqInfo,
               tool: toolInstance,
-              response: createErrorResponse(
-                reqInfo,
-                invocationOrError,
-                ToolErrorType.INVALID_TOOL_PARAMS,
-              ),
+              response: errorResponse,
               durationMs: 0,
+              monitoringId,
             };
           }
-
-          const startTime = Date.now();
-          const monitoringId = `tool-${reqInfo.callId}-${startTime}`;
-          
-          // Start monitoring
-          monitoringService.startToolCall(
-            monitoringId,
-            reqInfo.name,
-            reqInfo.callId,
-            reqInfo.prompt_id,
-            reqInfo.args
-          );
 
           return {
             status: 'validating',

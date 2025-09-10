@@ -43,6 +43,7 @@ import {
 } from '../config/models.js';
 import { LoopDetectionService } from '../services/loopDetectionService.js';
 import { ideContext } from '../ide/ideContext.js';
+import { monitoringService } from '../utils/monitoring.js';
 import {
   logChatCompression,
   logNextSpeakerCheck,
@@ -750,35 +751,62 @@ export class GeminiClient {
     if (!texts || texts.length === 0) {
       return [];
     }
-    const embedModelParams: EmbedContentParameters = {
-      model: this.embeddingModel,
-      contents: texts,
-    };
 
-    const embedContentResponse =
-      await this.getContentGenerator().embedContent(embedModelParams);
-    if (
-      !embedContentResponse.embeddings ||
-      embedContentResponse.embeddings.length === 0
-    ) {
-      throw new Error('No embeddings found in API response.');
-    }
+    // Generate unique ID for monitoring
+    const embeddingId = `embedding-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const promptId = 'embedding-request';
+    
+    // Start monitoring
+    monitoringService.startEmbeddingCall(
+      embeddingId,
+      this.embeddingModel,
+      promptId,
+      texts.length,
+      texts
+    );
 
-    if (embedContentResponse.embeddings.length !== texts.length) {
-      throw new Error(
-        `API returned a mismatched number of embeddings. Expected ${texts.length}, got ${embedContentResponse.embeddings.length}.`,
-      );
-    }
+    try {
+      const embedModelParams: EmbedContentParameters = {
+        model: this.embeddingModel,
+        contents: texts,
+      };
 
-    return embedContentResponse.embeddings.map((embedding, index) => {
-      const values = embedding.values;
-      if (!values || values.length === 0) {
+      const embedContentResponse =
+        await this.getContentGenerator().embedContent(embedModelParams);
+      
+      if (
+        !embedContentResponse.embeddings ||
+        embedContentResponse.embeddings.length === 0
+      ) {
+        throw new Error('No embeddings found in API response.');
+      }
+
+      if (embedContentResponse.embeddings.length !== texts.length) {
         throw new Error(
-          `API returned an empty embedding for input text at index ${index}: "${texts[index]}"`,
+          `API returned a mismatched number of embeddings. Expected ${texts.length}, got ${embedContentResponse.embeddings.length}.`,
         );
       }
-      return values;
-    });
+
+      const result = embedContentResponse.embeddings.map((embedding, index) => {
+        const values = embedding.values;
+        if (!values || values.length === 0) {
+          throw new Error(
+            `API returned an empty embedding for input text at index ${index}: "${texts[index]}"`,
+          );
+        }
+        return values;
+      });
+
+      // Complete monitoring successfully
+      const vectorDimensions = result.length > 0 ? result[0].length : undefined;
+      monitoringService.endEmbeddingCall(embeddingId, 'completed', undefined, vectorDimensions);
+      
+      return result;
+    } catch (error) {
+      // Complete monitoring with error
+      monitoringService.endEmbeddingCall(embeddingId, 'error', error instanceof Error ? error.message : 'Unknown error');
+      throw error;
+    }
   }
 
   async tryCompressChat(
